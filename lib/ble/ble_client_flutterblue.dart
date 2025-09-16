@@ -1,8 +1,5 @@
 // lib/ble/ble_client_flutterblue.dart
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_client.dart';
 
@@ -24,13 +21,26 @@ class FlutterBlueBleClient implements BleClient {
       for (final r in results) {
         final d = r.device;
         final id = d.remoteId.str;
-        final name = d.platformName.isEmpty ? '未知设备' : d.platformName;
-        seen[id] = BleDevice(id, name);
+
+        final adName = r.advertisementData.advName;
+        final devName = (adName != null && adName.isNotEmpty)
+            ? adName
+            : (d.platformName.isNotEmpty ? d.platformName : '未知设备');
+
+        // 日志，确认能扫到
+        print('[scan] id=$id name=$devName uuids=${r.advertisementData.serviceUuids}');
+
+        seen[id] = BleDevice(id, devName);
       }
       _scanCtl.add(seen.values.toList());
     });
 
-    FlutterBluePlus.startScan(timeout: timeout ?? const Duration(seconds: 15));
+    FlutterBluePlus.startScan(
+      timeout: timeout ?? const Duration(seconds: 15),
+      // 按服务过滤，确保只扫 UART
+      withServices: [Guid('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')],
+    );
+
     return _scanCtl.stream;
   }
 
@@ -43,19 +53,18 @@ class FlutterBlueBleClient implements BleClient {
 
   @override
   Future<void> connect(String deviceId) async {
+    // 关键修复：不要手动构造 BluetoothDevice；用 fromId 获取句柄
     await stopScan();
-    final dev = FlutterBluePlus.connectedDevices.firstWhere(
-          (d) => d.remoteId.str == deviceId,
-      orElse: () => BluetoothDevice(remoteId: DeviceIdentifier(deviceId), platformName: ''),
-    );
-    _device = dev;
+    _device = BluetoothDevice.fromId(deviceId);
     await _device!.connect(timeout: const Duration(seconds: 10));
   }
 
   @override
   Future<void> disconnect(String deviceId) async {
     if (_device != null) {
-      await _device!.disconnect();
+      try {
+        await _device!.disconnect();
+      } catch (_) {}
       _device = null;
       _rxChar = null;
       _txChar = null;

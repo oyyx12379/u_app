@@ -31,9 +31,6 @@ dev_dependencies:
 
 
 flutter:
-  assets:
-    - lib/blue/lv_img_ac.png
-
 
   uses-material-design: true
 
