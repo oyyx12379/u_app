@@ -1,0 +1,22 @@
+{
+  "id": "dwarf",
+  "name": "矮人 Dwarf",
+  "intro": "坚韧耐久，对毒素有抗性，工具与战斗素养良好。",
+  "traits": [
+    "速度：25尺（穿重甲不减速）",
+    "黑暗视觉：60尺",
+    "矮人韧性：对毒素相关的豁免具优势，并对毒素伤害具抗性",
+    "语言：通用语、矮人语"
+  ],
+  "proficiencies": ["（任选）铁匠工具 / 酿酒工具 / 石匠工具"],
+  "abilityBonuses": { "CON": 2 },
+  "subraces": [
+    {
+      "id": "hill_dwarf",
+      "name": "丘陵矮人",
+      "traits": ["额外生命：每等级 +1 生命值"],
+      "abilityBonuses": { "WIS": 1 }
+    }
+  ],
+  "version": "2014"
+}

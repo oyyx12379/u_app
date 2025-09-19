@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": "SRD-2014-demo-1.0.0",
+  "classes": [
+    "classes/barbarian.json"
+  ],
+  "races": [
+    "races/dwarf.json"
+  ],
+  "backgrounds": [
+    "backgrounds/acolyte.json"
+  ]
+}
