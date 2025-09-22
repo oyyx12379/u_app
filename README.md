@@ -36,16 +36,27 @@ ESP32-S3 硬件作为外设，APP 通过蓝牙向其传输角色信息和图片�
 
 lib/
 ├── main.dart # 入口，包含底部导航
+
 ├── scan_screen.dart # 蓝牙扫描与连接界面
+
 ├── esp32_device_screen.dart # 蓝牙设备交互界面
+
 ├── dice_page.dart # 骰盘界面
+
 ├── character_builder_wizard.dart # 角色卡向导（核心页面）
+
 ├── ble/
+
 │ └── ble_session.dart # BLE 全局会话封装（连接、写入、订阅）
+
 ├── data/
+
 │ ├── srd_models.dart # 数据模型（ClassData/RaceData/BackgroundData）
+
 │ ├── srd_repository.dart # 从 JSON 加载 SRD 数据
+
 │ └── srd_json/ # 外置的官方 SRD 数据（职业/种族/背景）
+
 
 ---
 
@@ -59,6 +70,7 @@ APP ↔ ESP32 之间的数据包采用自定义格式：
 - `type`：数值类别 (例：0x07 = 当前HP, 0x14 = DC)
 - `high/low`：数值的高低字节
 - 示例：`0x01 0x07 0x00 0x64 0x00` → 设置 HP=100
+- （末位0x00在DM端是对图标状态的改动位，例如专注状态0和1，会发送专注状态的type=0x03，末位0x00或0x01，因为APP端暂时没有状态改动的需求，所以暂时为0x00，具体可以看DM端关于蓝牙接收部分的代码）
 
 ### 2. 批量传输（角色关键数据）
 [0x02, type, high, low, 0x00] // 每条数据独立发送
