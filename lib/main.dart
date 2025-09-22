@@ -2,17 +2,18 @@
 import 'package:flutter/material.dart';
 import 'package:u_app/dice_page.dart';
 
-// === 你的原有页面 ===
-// 如果你的扫描页文件名或路径不同，请改成你的实际文件。
+// 你的扫描页
 import 'scan_screen.dart';
 
-// === 新的角色卡页面（外置 JSON 版） ===
+// 角色卡
 import 'character_builder_wizard.dart';
+
+// ✅ 导入 BleSession
+import 'ble/ble_session.dart';
 
 void main() {
   runApp(const MyApp());
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -31,9 +32,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// 底部导航：
-/// 1) “设备” 使用你原来的扫描页
-/// 2) “角色卡” 使用外置 SRD 数据的 demo 页面（替换你之前的角色卡实现）
 class _RootShell extends StatefulWidget {
   const _RootShell({super.key});
   @override
@@ -46,16 +44,18 @@ class _RootShellState extends State<_RootShell> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      const ScanScreen(),               // 你的原有蓝牙扫描/连接页
-      const CharacterBuilderWizardPage(),     // 新的角色创建向导
+      const ScanScreen(),
+
+      // ✅ 把发送方法注入到角色卡页面
+      CharacterBuilderWizardPage(
+        sendStat:  (type, value) => BleSession.I.sendStat(type, value),
+        sendBytes: (data)        => BleSession.I.writeRaw(data),
+      ),
+
       const DicePage(),
     ];
 
-    final titles = <String>[
-      '设备',
-      '角色卡',
-      '骰盘'
-    ];
+    final titles = <String>['设备', '角色卡', '骰盘'];
 
     return Scaffold(
       appBar: AppBar(title: Text(titles[_index])),

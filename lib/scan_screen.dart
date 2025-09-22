@@ -4,9 +4,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-// 如果你的包名不是 u_app，请改成你的实际包名，或者使用相对路径导入：
-// import '../ble/ble_session.dart';
-// import '../esp32_device_screen.dart';
 import 'package:u_app/ble/ble_session.dart';
 import 'package:u_app/esp32_device_screen.dart';
 

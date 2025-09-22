@@ -2,8 +2,13 @@
 import 'package:flutter/material.dart';
 import '../data/srd_repository.dart';
 import '../data/srd_models.dart';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 
 typedef SendStatFn = Future<void> Function(int typeByte, int value);
+typedef SendBytesFn = Future<void> Function(List<int> data);
+
 
 const kAbilities = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
 const kStandardArray = [15, 14, 13, 12, 10, 8];
@@ -36,7 +41,9 @@ List<String> parseSkillLine(String line) {
 
 class CharacterBuilderWizardPage extends StatefulWidget {
   final SendStatFn? sendStat;
-  const CharacterBuilderWizardPage({super.key, this.sendStat});
+  final SendBytesFn? sendBytes;  // ✅ 新增
+
+  const CharacterBuilderWizardPage({super.key, this.sendStat, this.sendBytes}); // ✅ 构造函数也加上
 
   @override
   State<CharacterBuilderWizardPage> createState() => _CharacterBuilderWizardPageState();
@@ -709,6 +716,93 @@ class _CharacterBuilderWizardPageState extends State<CharacterBuilderWizardPage>
     );
   }
 
+  // 把 PNG/JPG 文件转成合适大小的 JPEG（默认不缩放；你可以改成 320x240 等）
+  Future<Uint8List> _normalizeToJpeg(Uint8List inputBytes,
+      {int? maxWidth, int? maxHeight, int jpegQuality = 85}) async {
+    final src = img.decodeImage(inputBytes);
+    if (src == null) {
+      throw Exception('无法解码图片（仅支持 PNG/JPG）');
+    }
+    img.Image out = src;
+
+    // 如果指定了缩放
+    if (maxWidth != null || maxHeight != null) {
+      out = img.copyResize(
+        src,
+        width: maxWidth,
+        height: maxHeight,
+        // 注意：这里没有 fit 参数，image 库会按照 width/height 强行缩放。
+        // 如果你只传一个（width 或 height），则会按比例缩放。
+      );
+    }
+
+    final jpg = img.encodeJpg(out, quality: jpegQuality);
+    return Uint8List.fromList(jpg);
+  }
+
+
+  /// 根据你的分包协议（0x01 开始 / 0x02 数据 / 0x03 结束）打包成多帧
+  /// 说明：HEADER = 1(head) +2(total) +2(index) +2(len) = 7，结尾 1 字节 checksum
+  /// 这里选 dataChunk = 160，既能适配常见 MTU=185（净载约177），也较稳定；
+  /// 如你确认目标设备 MTU 恒为 23，可把 dataChunk 改为 <=12（但传输变慢）。
+  List<List<int>> _buildBleImagePackets(Uint8List data, {int dataChunk = 160}) {
+    const headerSize = 1 + 2 + 2 + 2; // 7
+    final totalBlocks = (data.length + dataChunk - 1) ~/ dataChunk;
+
+    List<int> makeFrame({
+      required int head,
+      required int total,
+      required int index,
+      required int length,
+      List<int>? payload,
+    }) {
+      final buf = <int>[];
+      // 头部
+      buf.add(head & 0xFF);
+      buf.add(total & 0xFF);           // total low
+      buf.add((total >> 8) & 0xFF);    // total high
+      buf.add(index & 0xFF);           // index low
+      buf.add((index >> 8) & 0xFF);    // index high
+      buf.add(length & 0xFF);          // len low
+      buf.add((length >> 8) & 0xFF);   // len high
+      // 有效载荷
+      if (payload != null && payload.isNotEmpty) {
+        buf.addAll(payload);
+      }
+      // 校验和：对前面所有字节求和取反
+      int sum = 0;
+      for (final b in buf) sum = (sum + b) & 0xFF;
+      final checksum = (~sum) & 0xFF;
+      buf.add(checksum);
+      return buf;
+    }
+
+    final frames = <List<int>>[];
+
+    // 起始包
+    frames.add(makeFrame(head: 0x01, total: totalBlocks, index: 0, length: 0));
+
+    // 数据包
+    for (int i = 0; i < totalBlocks; i++) {
+      final start = i * dataChunk;
+      final end = (start + dataChunk <= data.length) ? (start + dataChunk) : data.length;
+      final slice = data.sublist(start, end);
+      frames.add(makeFrame(
+        head: 0x02,
+        total: totalBlocks,
+        index: i + 1,
+        length: slice.length,
+        payload: slice,
+      ));
+    }
+
+    // 结束包
+    frames.add(makeFrame(head: 0x03, total: totalBlocks, index: totalBlocks + 1, length: 0));
+
+    return frames;
+  }
+
+
   Widget _buildStep4Summary() {
     final fs = _finalScores;
     final mods = { for (final a in kAbilities) a: abilityMod(fs[a]!) };
@@ -721,30 +815,46 @@ class _CharacterBuilderWizardPageState extends State<CharacterBuilderWizardPage>
     final tempHp = 0;
 
     Future<void> _sendAll() async {
-      if (widget.sendStat == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('未连接蓝牙或未注入发送方法')),
-        );
+      // 计算角色的数值
+      final dc = _spellSaveDC;
+      final pp = _passivePerception;
+      final ft = _speedFeet;
+      final maxHp = _maxHP;
+      final curHp = maxHp;
+      final tempHp = 0;
+
+      // 如果提供了 sendBytes（一次性发包），优先使用新的协议：
+      // 格式：[0x02, type, high, low, 0x00, type, high, low, 0x00, ...]
+      if (widget.sendBytes != null) {
+        final pkt = <int>[0x02];
+
+        void addEntry(int type, int value) {
+          final u = value.toUnsigned(16);
+          final hi = (u >> 8) & 0xFF;
+          final lo = u & 0xFF;
+          pkt.addAll([type, hi, lo, 0x00]);
+        }
+
+        addEntry(0x08, maxHp); // 最大生命
+        addEntry(0x07, curHp); // 当前生命
+        addEntry(0x09, tempHp); // 临时生命
+        if (dc != null) addEntry(0x14, dc); // DC（有才发）
+        addEntry(0x15, pp); // PP
+        addEntry(0x16, ft); // FT（移动速度）
+
+        try {
+          await widget.sendBytes!(pkt);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已一次性发送全部角色数据')),
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('发送失败：$e')),
+          );
+        }
         return;
-      }
-      await widget.sendStat!(0x08, maxHp);
-      await Future.delayed(const Duration(milliseconds: 50));
-      await widget.sendStat!(0x07, curHp);
-      await Future.delayed(const Duration(milliseconds: 50));
-      if (dc != null) {
-        await widget.sendStat!(0x14, dc);
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-      await widget.sendStat!(0x15, pp);
-      await Future.delayed(const Duration(milliseconds: 50));
-      await widget.sendStat!(0x16, ft);
-      await Future.delayed(const Duration(milliseconds: 50));
-      await widget.sendStat!(0x09, 0);
-      await Future.delayed(const Duration(milliseconds: 50));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已发送角色关键数值')),
-        );
       }
     }
 
@@ -783,12 +893,56 @@ class _CharacterBuilderWizardPageState extends State<CharacterBuilderWizardPage>
                   if (dc != null) Chip(label: Text('DC $dc')),
                   Chip(label: Text('PP $pp')),
                   Chip(label: Text('FT $ft 尺')),
-                ]),
+                ]),const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: widget.sendBytes == null ? null : () async {
+                    try {
+                      // 1) 选文件（PNG/JPG）
+                      final res = await FilePicker.platform.pickFiles(
+                        type: FileType.custom,
+                        allowedExtensions: ['png', 'jpg', 'jpeg'],
+                        withData: true,
+                      );
+                      if (res == null || res.files.isEmpty || res.files.first.bytes == null) return;
+
+                      final raw = res.files.first.bytes!;
+                      // 2) 统一转为 JPEG（支持选择 PNG）；可指定缩放到你屏幕分辨率，如 320x240
+                      final jpg = await _normalizeToJpeg(raw,
+                          // 比如你的 TFT 是 320x240，就打开下一行
+                          // maxWidth: 320, maxHeight: 240,
+                          jpegQuality: 85);
+
+                      // 3) 分包
+                      final packets = _buildBleImagePackets(jpg, dataChunk: 160);
+
+                      // 4) 逐包发送（每包稍微等一下更稳）
+                      for (final p in packets) {
+                        await widget.sendBytes!(p); // 复用你注入的 writeRaw
+                        await Future.delayed(const Duration(milliseconds: 5));
+                      }
+
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('图片已发送（自动转为JPEG）')),
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('发送失败：$e')),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.image_outlined),
+                  label: const Text('发送角色图片（支持PNG/JPG）'),
+                ),
+
                 const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: widget.sendStat == null ? null : _sendAll,
                   icon: const Icon(Icons.send),
-                  label: const Text('一键发送（分开发送，间隔50ms）'),
+                  label: const Text('一键发送'),
                 ),
               ]),
             ),
